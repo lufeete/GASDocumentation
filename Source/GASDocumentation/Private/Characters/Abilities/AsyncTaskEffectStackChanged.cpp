@@ -23,16 +23,28 @@ UAsyncTaskEffectStackChanged * UAsyncTaskEffectStackChanged::ListenForGameplayEf
 
 void UAsyncTaskEffectStackChanged::EndTask()
 {
+	if (bEnded)
+	{
+		return;
+	}
+	bEnded = true;
+
 	if (IsValid(ASC))
 	{
 		ASC->OnActiveGameplayEffectAddedDelegateToSelf.RemoveAll(this);
 		ASC->OnAnyGameplayEffectRemovedDelegate().RemoveAll(this);
 		
-		if(ActiveEffectHandle.IsValid())
+		for (const FActiveGameplayEffectHandle& ActiveEffectHandle : ActiveEffectHandles)
 		{
-			ASC->OnGameplayEffectStackChangeDelegate(ActiveEffectHandle)->RemoveAll(this);
+			// A valid handle does not guarantee that the effect still exists on the ASC.
+			if (FOnActiveGameplayEffectStackChange* Delegate = ASC->OnGameplayEffectStackChangeDelegate(ActiveEffectHandle))
+			{
+				Delegate->RemoveAll(this);
+			}
 		}
 	}
+	ActiveEffectHandles.Reset();
+	ASC = nullptr;
 
 	SetReadyToDestroy();
 	MarkAsGarbage();
@@ -40,6 +52,11 @@ void UAsyncTaskEffectStackChanged::EndTask()
 
 void UAsyncTaskEffectStackChanged::OnActiveGameplayEffectAddedCallback(UAbilitySystemComponent * Target, const FGameplayEffectSpec & SpecApplied, FActiveGameplayEffectHandle ActiveHandle)
 {
+	if (bEnded || !IsValid(ASC))
+	{
+		return;
+	}
+
 	FGameplayTagContainer AssetTags;
 	SpecApplied.GetAllAssetTags(AssetTags);
 
@@ -48,14 +65,34 @@ void UAsyncTaskEffectStackChanged::OnActiveGameplayEffectAddedCallback(UAbilityS
 
 	if (AssetTags.HasTagExact(EffectGameplayTag) || GrantedTags.HasTagExact(EffectGameplayTag))
 	{
-		ASC->OnGameplayEffectStackChangeDelegate(ActiveHandle)->AddUObject(this, &UAsyncTaskEffectStackChanged::GameplayEffectStackChanged);
+		if (!ActiveEffectHandles.Contains(ActiveHandle))
+		{
+			if (FOnActiveGameplayEffectStackChange* Delegate = ASC->OnGameplayEffectStackChangeDelegate(ActiveHandle))
+			{
+				Delegate->AddUObject(this, &UAsyncTaskEffectStackChanged::GameplayEffectStackChanged);
+				// Track before broadcasting: a Blueprint listener may call EndTask().
+				ActiveEffectHandles.Add(ActiveHandle);
+			}
+		}
 		OnGameplayEffectStackChange.Broadcast(EffectGameplayTag, ActiveHandle, 1, 0);
-		ActiveEffectHandle = ActiveHandle;
 	}
 }
 
 void UAsyncTaskEffectStackChanged::OnRemoveGameplayEffectCallback(const FActiveGameplayEffect & EffectRemoved)
 {
+	if (bEnded)
+	{
+		return;
+	}
+
+	if (ActiveEffectHandles.Remove(EffectRemoved.Handle) > 0 && IsValid(ASC))
+	{
+		if (FOnActiveGameplayEffectStackChange* Delegate = ASC->OnGameplayEffectStackChangeDelegate(EffectRemoved.Handle))
+		{
+			Delegate->RemoveAll(this);
+		}
+	}
+
 	FGameplayTagContainer AssetTags;
 	EffectRemoved.Spec.GetAllAssetTags(AssetTags);
 
@@ -70,5 +107,8 @@ void UAsyncTaskEffectStackChanged::OnRemoveGameplayEffectCallback(const FActiveG
 
 void UAsyncTaskEffectStackChanged::GameplayEffectStackChanged(FActiveGameplayEffectHandle EffectHandle, int32 NewStackCount, int32 PreviousStackCount)
 {
-	OnGameplayEffectStackChange.Broadcast(EffectGameplayTag, EffectHandle, NewStackCount, PreviousStackCount);
+	if (!bEnded)
+	{
+		OnGameplayEffectStackChange.Broadcast(EffectGameplayTag, EffectHandle, NewStackCount, PreviousStackCount);
+	}
 }

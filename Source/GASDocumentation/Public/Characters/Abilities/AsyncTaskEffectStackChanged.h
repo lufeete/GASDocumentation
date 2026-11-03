@@ -17,6 +17,8 @@ UCLASS(BlueprintType, meta = (ExposedAsyncProxy = AsyncTask))
 class GASDOCUMENTATION_API UAsyncTaskEffectStackChanged : public UBlueprintAsyncActionBase
 {
 	GENERATED_BODY()
+
+	friend class FGDAsyncTaskEffectStackChangedCleanupTest;
 	
 	UPROPERTY(BlueprintAssignable)
 	FOnGameplayEffectStackChanged OnGameplayEffectStackChange;
@@ -35,7 +37,8 @@ protected:
 
 	FGameplayTag EffectGameplayTag;
 
-	FActiveGameplayEffectHandle ActiveEffectHandle;
+	TSet<FActiveGameplayEffectHandle> ActiveEffectHandles;
+	bool bEnded = false;
 
 	virtual void OnActiveGameplayEffectAddedCallback(UAbilitySystemComponent* Target, const FGameplayEffectSpec& SpecApplied, FActiveGameplayEffectHandle ActiveHandle);
 	virtual void OnRemoveGameplayEffectCallback(const FActiveGameplayEffect& EffectRemoved);
